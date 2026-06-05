@@ -1,0 +1,184 @@
+# grafana/provisioning/alerting/alerts.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# UPGRADE 4: Grafana Unified Alerting — Provisioned Alert Rules
+#
+# WHY PROVISIONED YAML (not UI clicks)?
+#   Config-as-code: alerts are version-controlled, reviewed in PRs, and
+#   automatically deployed. UI changes are ephemeral — a Grafana upgrade or
+#   fresh container wipes them. Provisioned alerts survive restarts.
+#
+# ALERT PHILOSOPHY:
+#   Alert on SYMPTOMS (user impact), not causes. Three alerts here:
+#   a) P99 latency spike → users experiencing slow responses
+#   b) High rejection rate → users being blocked (possible DDoS or misconfigured limit)
+#   c) Redis errors → infrastructure degraded (fail-open active — risk window)
+#
+# HOW TO TEST EACH ALERT LOCALLY:
+#   a) P99 latency: run `k6 run scripts/stress.js` — 500 VUs will push latency up
+#   b) Rejection rate: run `for i in {1..200}; do curl localhost:3000/demo; done`
+#   c) Redis errors: `docker stop rl-redis` — kills Redis, errors increment
+# ═══════════════════════════════════════════════════════════════════════════════
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name:   "Rate Limiter Production Alerts"
+    folder: "Rate Limiter"
+    interval: 1m   # Evaluate all rules every 1 minute
+
+    rules:
+
+      # ── ALERT A: P99 Latency > 5ms for 2 minutes → CRITICAL → PagerDuty ──
+      - uid:          "rl-p99-latency-critical"
+        title:        "Rate Limiter P99 Latency Critical"
+        condition:    "C"
+        for:          "2m"   # Must be true for 2 continuous minutes before firing
+        annotations:
+          summary:     "P99 Redis Lua latency exceeded 5ms for 2 minutes"
+          description: "Current P99: {{ $values.C.Value }}ms. Redis may be overloaded or network partitioned. Fail-open is active but response times are degraded."
+          runbook_url: "https://wiki.yourcompany.com/runbooks/rate-limiter-latency"
+        labels:
+          severity:      "critical"
+          team:          "platform"
+          contact_point: "pagerduty"
+
+        data:
+          # Step A: Fetch raw histogram data from Prometheus
+          - refId: "A"
+            relativeTimeRange:
+              from: 300   # last 5 minutes
+              to:   0
+            datasourceUid: "prometheus"
+            model:
+              expr:       'rate(rate_limiter_latency_ms_bucket[1m])'
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          # Step B: Calculate P99
+          - refId: "B"
+            relativeTimeRange:
+              from: 300
+              to:   0
+            datasourceUid: "prometheus"
+            model:
+              expr:       'histogram_quantile(0.99, sum(rate(rate_limiter_latency_ms_bucket[1m])) by (le, route))'
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          # Step C: Threshold check — P99 > 5ms
+          - refId:        "C"
+            datasourceUid: "__expr__"
+            model:
+              type:       "threshold"
+              refId:      "C"
+              conditions:
+                - evaluator:
+                    params: [5]        # 5ms threshold
+                    type:   "gt"       # greater than
+                  operator:
+                    type: "and"
+                  query:
+                    params: ["B"]
+                  reducer:
+                    params: []
+                    type:   "last"
+                  type: "query"
+
+      # ── ALERT B: Rejection Rate > 30% → WARNING → Slack ──────────────────
+      - uid:          "rl-rejection-rate-warning"
+        title:        "Rate Limiter High Rejection Rate"
+        condition:    "C"
+        for:          "1m"
+        annotations:
+          summary:     "More than 30% of all requests are being rejected"
+          description: "Current rejection rate: {{ $values.C.Value | humanizePercentage }}. This could indicate a DDoS attack, a misconfigured rate limit, or a legitimate traffic surge."
+          runbook_url: "https://wiki.yourcompany.com/runbooks/rate-limiter-rejections"
+        labels:
+          severity:      "warning"
+          team:          "platform"
+          contact_point: "slack"
+
+        data:
+          - refId: "A"
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: "prometheus"
+            model:
+              expr: 'rate(rate_limiter_requests_total{status="blocked"}[1m])'
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          - refId: "B"
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: "prometheus"
+            model:
+              expr: 'rate(rate_limiter_requests_total[1m])'
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          # Step C: blocked/total > 0.30 (30%)
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              type:  "math"
+              refId: "C"
+              expression: "$A / $B"
+            # Then threshold: > 0.30
+          - refId: "D"
+            datasourceUid: "__expr__"
+            model:
+              type:  "threshold"
+              refId: "D"
+              conditions:
+                - evaluator:
+                    params: [0.30]
+                    type:   "gt"
+                  operator:
+                    type: "and"
+                  query:
+                    params: ["C"]
+                  reducer:
+                    params: []
+                    type:   "last"
+                  type: "query"
+
+      # ── ALERT C: Redis Errors > 0 → CRITICAL → PagerDuty + Slack ─────────
+      - uid:          "rl-redis-errors-critical"
+        title:        "Rate Limiter Redis Errors Detected"
+        condition:    "C"
+        for:          "0s"   # Fire immediately — any Redis error is critical
+        annotations:
+          summary:     "Redis connection errors detected in rate limiter"
+          description: "Error type: {{ $labels.error_type }}. Count: {{ $values.C.Value }}. Fail-open is active — rate limiting is DISABLED. All requests are being allowed through."
+          runbook_url: "https://wiki.yourcompany.com/runbooks/rate-limiter-redis-errors"
+        labels:
+          severity:      "critical"
+          team:          "platform"
+          contact_point: "pagerduty-and-slack"
+
+        data:
+          - refId: "A"
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: "prometheus"
+            model:
+              expr:       'increase(rate_limiter_redis_errors_total[1m])'
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              type:  "threshold"
+              refId: "C"
+              conditions:
+                - evaluator:
+                    params: [0]    # > 0 errors
+                    type:   "gt"
+                  operator:
+                    type: "and"
+                  query:
+                    params: ["A"]
+                  reducer:
+                    params: []
+                    type:   "last"
+                  type: "query"

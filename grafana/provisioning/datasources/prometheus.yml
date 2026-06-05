@@ -1,0 +1,21 @@
+# Grafana Datasource Provisioning
+# ─────────────────────────────────────────────────────────────────────────────
+# This file tells Grafana to auto-configure Prometheus as a datasource on boot.
+# No manual clicking in the UI required — this is GitOps-friendly.
+#
+# Interview talking point:
+#   "We provision Grafana declaratively via YAML. This means a fresh
+#    `docker compose up` gives you a fully-configured dashboard in 30 seconds.
+#    No manual setup steps = reproducible environments = ops maturity."
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy        # Grafana backend proxies requests to Prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "5s"  # Matches our scrape_interval

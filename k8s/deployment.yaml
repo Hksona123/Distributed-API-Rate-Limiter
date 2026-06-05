@@ -1,0 +1,146 @@
+# k8s/deployment.yaml — UPGRADE 3: Kubernetes Deployment
+# ════════════════════════════════════════════════════════
+#
+# Production-grade K8s Deployment for the rate limiter API.
+#
+# Key decisions:
+#   - 3 replicas minimum (HA — survives 1 node failure)
+#   - resource requests/limits prevent noisy-neighbour starvation
+#   - liveness probe restarts crashed/deadlocked pods
+#   - readiness probe ensures zero-downtime deploys (only ready pods get traffic)
+#   - terminationGracePeriodSeconds: 30 — in-flight requests finish before pod dies
+#   - topologySpreadConstraints: spread pods across zones for AZ resilience
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limiter-api
+  namespace: rate-limiter
+  labels:
+    app: rate-limiter-api
+    version: "2.0.0"
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rate-limiter-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:        1   # At most 1 extra pod during deploy
+      maxUnavailable:  0   # Never reduce capacity during deploy (zero-downtime)
+
+  template:
+    metadata:
+      labels:
+        app: rate-limiter-api
+        version: "2.0.0"
+      annotations:
+        # Forces pod restart when ConfigMap changes (Reloader pattern)
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "3000"
+        prometheus.io/path:   "/metrics"
+    spec:
+      # Spread pods across failure zones for AZ resilience
+      topologySpreadConstraints:
+        - maxSkew:            1
+          topologyKey:        topology.kubernetes.io/zone
+          whenUnsatisfiable:  DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: rate-limiter-api
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: rate-limiter-api
+          image: your-registry/rate-limiter-api:2.0.0  # Replace with your image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+
+          # ── Resource management ─────────────────────────────────────────
+          # requests: guaranteed allocation (scheduler uses this for placement)
+          # limits: hard ceiling (OOMKilled if exceeded — better than OOM the node)
+          resources:
+            requests:
+              cpu:    "100m"    # 0.1 vCPU guaranteed
+              memory: "128Mi"   # 128MB guaranteed
+            limits:
+              cpu:    "500m"    # 0.5 vCPU max (rate limiter is I/O-bound, not CPU-bound)
+              memory: "256Mi"   # 256MB max
+
+          # ── Environment variables ────────────────────────────────────────
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiter-config
+                  key: PORT
+            - name: FAIL_OPEN
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiter-config
+                  key: FAIL_OPEN
+            - name: RATE_LIMIT_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiter-config
+                  key: RATE_LIMIT_MAX
+            - name: WINDOW_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: rate-limiter-config
+                  key: WINDOW_MS
+            - name: REDIS_CLUSTER_NODES
+              valueFrom:
+                secretKeyRef:
+                  name: rate-limiter-secrets
+                  key: REDIS_CLUSTER_NODES
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rate-limiter-secrets
+                  key: REDIS_PASSWORD
+
+          # ── Liveness probe ───────────────────────────────────────────────
+          # "Is the process alive?" — if this fails, K8s KILLS and RESTARTS the pod.
+          # Hitting /health checks Redis ping — if Redis is totally gone AND
+          # we've somehow deadlocked, the process should restart.
+          # Note: We return 503 (not 500) when Redis is down so liveness doesn't
+          # kill pods during a Redis outage (fail-open keeps the API alive).
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15  # Give Node.js time to boot + connect to Redis
+            periodSeconds:       10
+            timeoutSeconds:      5
+            failureThreshold:    3   # 3 consecutive failures → restart pod
+
+          # ── Readiness probe ──────────────────────────────────────────────
+          # "Is the pod ready to receive traffic?" — if this fails, K8s removes
+          # the pod from the Service endpoint list (no traffic sent to it).
+          # More sensitive than liveness — single failure removes from rotation.
+          # Critical for zero-downtime deploys: new pods only get traffic when ready.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds:       5
+            timeoutSeconds:      3
+            failureThreshold:    1   # 1 failure → stop sending traffic immediately
+            successThreshold:    1   # 1 success → add back to rotation
+
+          # ── Startup probe ────────────────────────────────────────────────
+          # Prevents liveness from killing slow-starting pods during cold boot.
+          # Gives up to 30s for the app to start before liveness takes over.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold: 6
+            periodSeconds:    5

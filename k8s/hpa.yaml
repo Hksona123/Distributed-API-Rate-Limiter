@@ -1,0 +1,98 @@
+# k8s/hpa.yaml — UPGRADE 3: Horizontal Pod Autoscaler
+# ════════════════════════════════════════════════════
+#
+# Scales the rate-limiter-api Deployment based on TWO signals:
+#
+# SIGNAL 1 — CPU utilization > 60%
+#   Standard HPA metric. Rate limiting is I/O-bound (Redis calls), but CPU
+#   spikes when Lua script execution surges at >10k RPS. Scaling on CPU
+#   adds more Node.js workers to distribute the Redis round-trip load.
+#
+# SIGNAL 2 — Custom metric: rate_limiter_rejected_total > 500/s
+#   This is the KEY production metric. A surge in rejections means:
+#     a) Legitimate traffic spike → scale up to handle more allowed requests
+#     b) DDoS → scale up to absorb blocked requests without CPU saturation
+#   The custom metric requires Prometheus Adapter installed in your cluster
+#   (https://github.com/kubernetes-sigs/prometheus-adapter).
+#
+# HPA BEHAVIOUR:
+#   - scaleDown: slow (5 min stabilization) — prevents thrashing
+#   - scaleUp:   fast (60s stabilization)   — respond to spikes quickly
+#   - min: 3 replicas always (HA across zones)
+#   - max: 10 replicas (cost cap — adjust for your budget)
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rate-limiter-api-hpa
+  namespace: rate-limiter
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind:       Deployment
+    name:       rate-limiter-api
+
+  minReplicas: 3
+  maxReplicas: 10
+
+  metrics:
+    # ── Metric 1: CPU utilization ──────────────────────────────────────────
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               Utilization
+          averageUtilization: 60  # Scale when avg CPU across all pods > 60%
+
+    # ── Metric 2: Custom Prometheus metric (rejected requests rate) ────────
+    # Requires: prometheus-adapter configured to expose this metric.
+    # The adapter queries: rate(rate_limiter_requests_total{status="blocked"}[1m])
+    # and exposes it as a custom metric named "rate_limiter_rejected_per_second".
+    - type: Pods
+      pods:
+        metric:
+          name: rate_limiter_rejected_per_second
+        target:
+          type:         AverageValue
+          averageValue: 500  # Scale when avg rejections > 500/s per pod
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60      # Wait 60s before scaling up
+      policies:
+        - type:          Pods
+          value:         2                 # Add at most 2 pods per scale event
+          periodSeconds: 60
+      selectPolicy: Max
+
+    scaleDown:
+      stabilizationWindowSeconds: 300     # Wait 5 min before scaling down
+      policies:
+        - type:          Pods
+          value:         1                 # Remove at most 1 pod per scale event
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+# prometheus-adapter ConfigMap — teaches K8s how to query the custom metric
+# ════════════════════════════════════════════════════════════════════════════
+# Install prometheus-adapter first:
+#   helm install prometheus-adapter prometheus-community/prometheus-adapter \
+#     --namespace monitoring --set prometheus.url=http://prometheus.monitoring.svc.cluster.local
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    rules:
+      - seriesQuery: 'rate_limiter_requests_total{status="blocked"}'
+        resources:
+          overrides:
+            namespace: { resource: namespace }
+            pod:        { resource: pod }
+        name:
+          matches:     "rate_limiter_requests_total"
+          as:          "rate_limiter_rejected_per_second"
+        metricsQuery: 'sum(rate(rate_limiter_requests_total{status="blocked"}[1m])) by (pod, namespace)'

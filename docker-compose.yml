@@ -1,0 +1,146 @@
+# UPGRADE 1 — Redis Cluster (local 3-node)
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY: Single Redis = SPOF. Cluster = automatic failover + horizontal sharding.
+#
+# Bitnami redis-cluster image handles the cluster-init handshake automatically.
+# 3 primaries + 0 replicas for local dev (use 3+3 in staging/prod).
+#
+# IMPORTANT: After first boot, the cluster needs a few seconds to elect
+# primaries. The API server will retry with exponential back-off (see redisClient.ts).
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.8'
+
+services:
+
+  # ── UPGRADE 1: Redis Cluster (3 nodes) ──────────────────────────────────────
+  redis-node-1:
+    image: bitnami/redis-cluster:7.2
+    environment:
+      - REDIS_PORT_NUMBER=7001
+      - REDIS_CLUSTER_ANNOUNCE_PORT=7001
+      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-1
+      - REDIS_CLUSTER_CREATOR=yes
+      - REDIS_CLUSTER_REPLICAS=0
+      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
+      - ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - "7001:7001"
+    networks:
+      - rate-limiter-net
+
+  redis-node-2:
+    image: bitnami/redis-cluster:7.2
+    environment:
+      - REDIS_PORT_NUMBER=7002
+      - REDIS_CLUSTER_ANNOUNCE_PORT=7002
+      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-2
+      - REDIS_CLUSTER_REPLICAS=0
+      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
+      - ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - "7002:7002"
+    networks:
+      - rate-limiter-net
+    depends_on:
+      - redis-node-1
+
+  redis-node-3:
+    image: bitnami/redis-cluster:7.2
+    environment:
+      - REDIS_PORT_NUMBER=7003
+      - REDIS_CLUSTER_ANNOUNCE_PORT=7003
+      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-3
+      - REDIS_CLUSTER_REPLICAS=0
+      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
+      - ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - "7003:7003"
+    networks:
+      - rate-limiter-net
+    depends_on:
+      - redis-node-1
+
+  # ── UPGRADE 2: Nginx reverse proxy for TLS termination ──────────────────────
+  # WHY terminate TLS at nginx NOT in Express:
+  #   - Nginx handles TLS handshake in C (10x faster than Node.js)
+  #   - Express/Node stays single-purpose (business logic only)
+  #   - Cert rotation doesn't require app restarts (nginx -s reload)
+  #   - nginx can rate-limit connections before they reach Node (extra DDoS layer)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - rate-limiter-net
+    depends_on:
+      - api
+
+  # ── API Gateway ─────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - PORT=3000
+      - REDIS_CLUSTER_NODES=redis-node-1:7001,redis-node-2:7002,redis-node-3:7003
+      - FAIL_OPEN=true
+    expose:
+      - "3000"
+    networks:
+      - rate-limiter-net
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── Prometheus ───────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - rate-limiter-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── Grafana ──────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/rate-limiter.json
+      # UPGRADE 4: Alerting contact point secrets injected via env
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - PAGERDUTY_INTEGRATION_KEY=${PAGERDUTY_INTEGRATION_KEY:-}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting
+      - grafana-data:/var/lib/grafana
+    networks:
+      - rate-limiter-net
+    depends_on:
+      - prometheus
+
+networks:
+  rate-limiter-net:
+    driver: bridge
+
+volumes:
+  grafana-data:

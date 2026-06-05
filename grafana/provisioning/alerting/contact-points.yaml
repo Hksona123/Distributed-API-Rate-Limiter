@@ -1,0 +1,113 @@
+# grafana/provisioning/alerting/contact-points.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# UPGRADE 4: Grafana Contact Points — PagerDuty + Slack
+#
+# Secrets are injected via environment variables (never hardcoded).
+# Set in docker-compose.yml:
+#   PAGERDUTY_INTEGRATION_KEY=your-pd-key
+#   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+#
+# HOW TO GET THE KEYS:
+#   PagerDuty: Service → Integrations → Add Integration → Grafana
+#   Slack:     api.slack.com/apps → Incoming Webhooks → Add New Webhook
+# ═══════════════════════════════════════════════════════════════════════════════
+
+apiVersion: 1
+
+contactPoints:
+
+  # ── PagerDuty (CRITICAL alerts — wakes someone up at 3am) ────────────────
+  - orgId: 1
+    name:   "pagerduty"
+    receivers:
+      - uid:  "pd-receiver"
+        type: "pagerduty"
+        settings:
+          integrationKey: "${PAGERDUTY_INTEGRATION_KEY}"
+          severity:       "critical"
+          # Rich alert payload — shows in PagerDuty timeline
+          summary:   "{{ .CommonAnnotations.summary }}"
+          details:   "{{ .CommonAnnotations.description }}"
+          component: "rate-limiter-api"
+          group:     "platform"
+          class:     "infrastructure"
+        disableResolveMessage: false   # Send "resolved" when alert clears
+
+  # ── Slack (WARNING + supplemental CRITICAL notifications) ────────────────
+  - orgId: 1
+    name:   "slack"
+    receivers:
+      - uid:  "slack-receiver"
+        type: "slack"
+        settings:
+          url:      "${SLACK_WEBHOOK_URL}"
+          recipient: "#platform-alerts"  # Your Slack channel
+          mentionUsers: ""
+          # Severity-aware mention (uncomment to page @oncall for warnings)
+          # mentionGroups: "{{ if eq .CommonLabels.severity \"critical\" }}oncall{{ end }}"
+          title: |-
+            {{ if eq .CommonLabels.severity "critical" }}🔴{{ else }}🟡{{ end }}
+            [{{ .CommonLabels.severity | toUpper }}] {{ .CommonAnnotations.summary }}
+          text:  |-
+            *Alert:* {{ .CommonAnnotations.summary }}
+            *Details:* {{ .CommonAnnotations.description }}
+            *Severity:* {{ .CommonLabels.severity }}
+            *Team:* {{ .CommonLabels.team }}
+            <{{ .CommonAnnotations.runbook_url }}|📖 Runbook>
+        disableResolveMessage: false
+
+  # ── PagerDuty AND Slack (for Redis errors — notify both) ─────────────────
+  - orgId: 1
+    name:   "pagerduty-and-slack"
+    receivers:
+      - uid:  "pd-and-slack-pd"
+        type: "pagerduty"
+        settings:
+          integrationKey: "${PAGERDUTY_INTEGRATION_KEY}"
+          severity:       "critical"
+          summary:        "{{ .CommonAnnotations.summary }}"
+          details:        "{{ .CommonAnnotations.description }}"
+          component:      "rate-limiter-redis"
+          class:          "infrastructure"
+        disableResolveMessage: false
+      - uid:  "pd-and-slack-slack"
+        type: "slack"
+        settings:
+          url:       "${SLACK_WEBHOOK_URL}"
+          recipient: "#platform-alerts"
+          title: "🔴 [CRITICAL] {{ .CommonAnnotations.summary }}"
+          text:  |-
+            *Redis is erroring — FAIL-OPEN IS ACTIVE*
+            Rate limiting is temporarily disabled. All requests are passing through.
+            *Details:* {{ .CommonAnnotations.description }}
+            <{{ .CommonAnnotations.runbook_url }}|📖 Runbook>
+        disableResolveMessage: false
+
+---
+# Notification policies — routes alerts to the right contact point
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: slack   # Default fallback
+    group_by: [alertname, severity]
+    group_wait:       30s
+    group_interval:   5m
+    repeat_interval:  4h
+
+    routes:
+      # Route CRITICAL to PagerDuty
+      - receiver: pagerduty
+        matchers:
+          - severity = critical
+            contact_point != pagerduty-and-slack
+
+      # Route Redis errors to both
+      - receiver: pagerduty-and-slack
+        matchers:
+          - contact_point = pagerduty-and-slack
+
+      # Route WARNINGs to Slack only
+      - receiver: slack
+        matchers:
+          - severity = warning

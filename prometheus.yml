@@ -1,0 +1,39 @@
+# prometheus.yml
+# ────────────────────────────────────────────────────────────────────────────
+# Prometheus scrape configuration.
+#
+# How it works:
+#   Prometheus runs on port 9090 (see docker-compose.yml).
+#   Every 15 seconds it sends a GET to http://api-gateway:3000/metrics
+#   and stores the result as time-series data in its TSDB.
+#
+# Interview talking point:
+#   "Pull-based scraping means we never lose metrics even if the app is
+#    down — Prometheus records the absence as a gap, which is itself an alert.
+#    Compare this to push-based (StatsD, InfluxDB line protocol) where a dead
+#    app silently stops sending data and the gap is invisible without extra
+#    tooling like a heartbeat monitor."
+
+global:
+  scrape_interval: 15s       # Default: every 15 seconds
+  evaluation_interval: 15s   # How often to evaluate alerting rules
+
+scrape_configs:
+  # Our Node.js API Gateway
+  - job_name: 'rate-limiter-api'
+    static_configs:
+      - targets: ['host.docker.internal:3000']
+    # host.docker.internal resolves to the host machine from inside Docker.
+    # On Linux you may need to use the actual host IP or use --add-host.
+    metrics_path: /metrics
+    scrape_interval: 5s   # More frequent for demo purposes (real: 15s)
+
+  # Prometheus itself (for self-monitoring)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Redis Exporter (optional — uncomment if you add redis_exporter to compose)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
