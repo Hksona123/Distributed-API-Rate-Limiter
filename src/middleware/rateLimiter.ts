@@ -7,6 +7,7 @@ import {
   rateLimiterWindowUtilization,
 } from '../metrics';
 import { sanitizeIdentifier, RateLimiterError } from '../utils/sanitizeKey';
+import { recordRequest } from '../routes/metricsStream';
 
 export interface RateLimitConfig {
   windowMs: number;
@@ -115,6 +116,15 @@ export const rateLimit = (config: RateLimitConfig) => {
         const retryAfterSec = Math.max(1, Math.floor((result.resetAt - Date.now()) / 1000));
         res.setHeader('Retry-After', retryAfterSec);
 
+        // Record to dashboard metrics
+        recordRequest({
+          route:     routeLabel || req.path,
+          ip:        (req.ip ?? req.socket.remoteAddress ?? 'unknown').replace('::ffff:', ''),
+          allowed:   false,
+          latencyMs,
+          status:    429,
+        });
+
         res.status(429).json({
           error:      'Too Many Requests',
           message:    'Rate limit exceeded. Please try again later.',
@@ -128,6 +138,15 @@ export const rateLimit = (config: RateLimitConfig) => {
 
       const utilization = (config.max - result.remaining) / config.max;
       rateLimiterWindowUtilization.labels(routeLabel).set(utilization);
+
+      // Record to dashboard metrics
+      recordRequest({
+        route:     routeLabel || req.path,
+        ip:        (req.ip ?? req.socket.remoteAddress ?? 'unknown').replace('::ffff:', ''),
+        allowed:   true,
+        latencyMs,
+        status:    200,
+      });
 
       next();
 

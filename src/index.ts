@@ -4,11 +4,20 @@ import { getMetrics, metricsContentType } from './metrics';
 import { apiRouter } from './routes/api';
 import { docsRouter } from './routes/docs';
 import { rateLimit } from './middleware/rateLimiter';
+import { metricsRouter } from './routes/metricsStream';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// Allow frontend dev server (Vite on :4000) to reach the backend
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOT: Connect to Redis on startup
@@ -95,6 +104,13 @@ app.get('/demo', demoLimiter, (_req: Request, res: Response) => {
 // /api/* — All tiered API routes (defined in routes/api.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 app.use('/api', apiRouter);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /metrics/stream, /metrics/routes, /metrics/log — SSE + dashboard data
+// /test/fire — playground single-request endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+app.use('/metrics', metricsRouter);
+app.use('/test',    metricsRouter);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /docs — Swagger API documentation

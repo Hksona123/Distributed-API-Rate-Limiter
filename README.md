@@ -11,6 +11,32 @@
 
 ## Live Screenshots
 
+### Dashboard Pages
+
+| Dashboard | Live Metrics |
+|:---:|:---:|
+| ![Dashboard](images/dashboard.png) | ![Live Metrics](images/live_metrics.png) |
+
+| Request Log | Playground |
+|:---:|:---:|
+| ![Request Log](images/request_log.png) | ![Playground](images/playground.png) |
+
+| Alerts | Load Test |
+|:---:|:---:|
+| ![Alerts](images/alerts.png) | ![Load Test](images/load_test.png) |
+
+| Rate Rules | Redis Config |
+|:---:|:---:|
+| ![Rate Rules](images/rate_rules.png) | ![Redis Config](images/redis_config.png) |
+
+| API Keys | Documentation |
+|:---:|:---:|
+| ![API Keys](images/api_keys.png) | ![Documentation](images/documentation.png) |
+
+![Settings](images/settings.png)
+
+### Original Endpoints & Observability
+
 | Landing Page | Swagger Docs |
 |:---:|:---:|
 | ![Landing Page](images/landing_page.png) | ![Swagger Docs](images/swagger_docs.png) |
@@ -409,7 +435,7 @@ npm test
 
 ## Load Testing (k6)
 
-```bash
+```bashCO
 # Install k6
 sudo snap install k6
 
