@@ -19,4 +19,136 @@
   ::-webkit-scrollbar-thumb:hover { background: #5E35B1; }
 
   ::selection { background: rgba(115,82,199,0.15); }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     GLOBAL RANGE SLIDER
+     Ensures the circular thumb is always perfectly centred on the track
+     across Chrome/Safari (webkit), Firefox (moz), and IE/Edge (ms).
+  ───────────────────────────────────────────────────────────────────────── */
+
+  /* 1. Strip all browser defaults */
+  input[type='range'] {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    /* Height must equal the thumb diameter so the thumb doesn't overflow */
+    height: 20px;
+    background: transparent;
+    cursor: pointer;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    border: none;
+    /* Vertically centre the track inside the 20px height */
+    align-self: center;
+  }
+
+  input[type='range']:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ── WEBKIT (Chrome, Safari, Edge Chromium) ── */
+
+  /* Track */
+  input[type='range']::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 99px;
+    background: #E2E8F0;
+  }
+
+  /* Thumb: diameter = 18px, vertically centred on 6px track.
+     offset = -(18px - 6px) / 2 = -6px */
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #7352C7;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 6px rgba(115, 82, 199, 0.45);
+    margin-top: -6px;       /* (thumb - track) / 2 = (18 - 6) / 2 = 6 */
+    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+    cursor: pointer;
+  }
+
+  input[type='range']::-webkit-slider-thumb:hover {
+    background: #5E35B1;
+    box-shadow: 0 1px 10px rgba(115, 82, 199, 0.6);
+  }
+
+  input[type='range']::-webkit-slider-thumb:active {
+    transform: scale(1.15);
+    background: #5E35B1;
+  }
+
+  /* ── MOZILLA (Firefox) ── */
+
+  /* Track */
+  input[type='range']::-moz-range-track {
+    height: 6px;
+    border-radius: 99px;
+    background: #E2E8F0;
+    border: none;
+  }
+
+  /* Filled portion (progress) */
+  input[type='range']::-moz-range-progress {
+    height: 6px;
+    border-radius: 99px;
+    background: #7352C7;
+  }
+
+  /* Thumb: Firefox centres it automatically on the track */
+  input[type='range']::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #7352C7;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 6px rgba(115, 82, 199, 0.45);
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+  }
+
+  input[type='range']::-moz-range-thumb:hover {
+    background: #5E35B1;
+    box-shadow: 0 1px 10px rgba(115, 82, 199, 0.6);
+  }
+
+  input[type='range']::-moz-range-thumb:active {
+    transform: scale(1.15);
+  }
+
+  /* ── MICROSOFT (IE / legacy Edge) ── */
+  input[type='range']::-ms-track {
+    height: 6px;
+    border-radius: 99px;
+    background: transparent;
+    border-color: transparent;
+    color: transparent;
+  }
+
+  input[type='range']::-ms-fill-lower {
+    background: #7352C7;
+    border-radius: 99px;
+  }
+
+  input[type='range']::-ms-fill-upper {
+    background: #E2E8F0;
+    border-radius: 99px;
+  }
+
+  input[type='range']::-ms-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #7352C7;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 6px rgba(115, 82, 199, 0.45);
+    margin-top: 0;
+  }
 }

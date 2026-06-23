@@ -135,7 +135,7 @@ metricsRouter.get('/routes', (_req: Request, res: Response) => {
 // ─── Request log — GET /metrics/log ──────────────────────────────────────────
 
 metricsRouter.get('/log', (req: Request, res: Response) => {
-  const limit = Math.min(parseInt(req.query.limit as string ?? '20'), 100)
+  const limit = Math.min(parseInt(req.query.limit as string ?? '100'), 200)
   res.json(requestLog.slice(-limit).map(l => ({
     ts:      (l as any).ts,
     ip:      (l as any).ip,
@@ -143,6 +143,16 @@ metricsRouter.get('/log', (req: Request, res: Response) => {
     status:  (l as any).status,
     latency: (l as any).latencyMs,
   })))
+})
+
+// ─── Flush — POST /metrics/flush ─────────────────────────────────────────────
+// Clears the in-memory request log and route stats (not Redis keys)
+
+metricsRouter.post('/flush', (_req: Request, res: Response) => {
+  requestLog.splice(0, requestLog.length)
+  routeStats.clear()
+  rollingWindow.splice(0, rollingWindow.length)
+  res.json({ ok: true, message: 'In-memory metrics flushed' })
 })
 
 // ─── Fire — POST /test/fire ───────────────────────────────────────────────────
