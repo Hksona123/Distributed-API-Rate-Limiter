@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { MoreHorizontal, Clock, Hash, TrendingUp, RefreshCw, Copy } from 'lucide-react'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
+import { BACKEND_HREF } from './lib/api'
 
 import { MetricsProvider, useMetrics } from './context/MetricsContext'
 import { ToastProvider }               from './context/ToastContext'
@@ -44,7 +45,7 @@ function RpsCardMenu({ rps }: { rps: number }) {
   }
 
   const openMetrics = () => {
-    window.open('http://localhost:3000/metrics', '_blank')
+    window.open(`${BACKEND_HREF}/metrics`, '_blank')
     setOpen(false)
   }
 

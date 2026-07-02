@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ExternalLink, Copy, CheckCircle } from 'lucide-react'
+import { BACKEND_HREF } from '../lib/api'
 
 interface Endpoint {
   method: 'GET' | 'POST'
@@ -55,10 +56,10 @@ export function DocsPage() {
           <h2 className="text-[17px] font-bold text-txt-primary">API Reference</h2>
           <p className="text-[13px] text-txt-secondary mt-0.5">
             Distributed High-Throughput API Rate Limiter · v2.0.0 · Base URL:{' '}
-            <code className="bg-page-bg px-1.5 py-0.5 rounded text-[12px] font-mono text-berry">http://localhost:3000</code>
+            <code className="bg-page-bg px-1.5 py-0.5 rounded text-[12px] font-mono text-berry">{BACKEND_HREF}</code>
           </p>
         </div>
-        <a href="http://localhost:3000/docs" target="_blank" rel="noreferrer"
+        <a href={`${BACKEND_HREF}/docs`} target="_blank" rel="noreferrer"
            className="flex items-center gap-1.5 text-[13px] font-semibold text-berry bg-sidebar-act
                       px-3 py-1.5 rounded-badge hover:bg-purple-100 transition-colors">
           <ExternalLink size={13} /> Swagger UI
@@ -85,8 +86,8 @@ export function DocsPage() {
           const isOpen   = expanded === ep.path
           const curlBase = ep.headers?.map(h => `-H "${h}"`).join(' \\\n  ') ?? ''
           const curlCmd  = ep.method === 'GET'
-            ? `curl http://localhost:3000${ep.path}${curlBase ? ` \\\n  ${curlBase}` : ''}`
-            : `curl -X POST http://localhost:3000${ep.path}${curlBase ? ` \\\n  ${curlBase}` : ''}${ep.body ? ` \\\n  -d '${ep.body}'` : ''}`
+            ? `curl ${BACKEND_HREF}${ep.path}${curlBase ? ` \\\n  ${curlBase}` : ''}`
+            : `curl -X POST ${BACKEND_HREF}${ep.path}${curlBase ? ` \\\n  ${curlBase}` : ''}${ep.body ? ` \\\n  -d '${ep.body}'` : ''}`
 
           return (
             <div key={ep.path} className="bg-white rounded-card shadow-card overflow-hidden">

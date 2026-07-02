@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Save, CheckCircle, RefreshCw, Trash2, ExternalLink, Activity } from 'lucide-react'
+import { BACKEND_HREF } from '../lib/api'
 
 interface HealthData {
   status: string
@@ -43,11 +44,11 @@ export function SettingsPage() {
     setHLoading(true)
     setHError(null)
     try {
-      const res  = await fetch('http://localhost:3000/health')
+      const res  = await fetch('/health')
       const data = await res.json() as HealthData
       setHealth(data)
     } catch (e) {
-      setHError('Could not reach backend at localhost:3000')
+      setHError('Could not reach the backend')
     } finally { setHLoading(false) }
   }
 
@@ -71,7 +72,7 @@ export function SettingsPage() {
     setFlushing(true)
     try {
       // POST to /test/flush if it exists, else just refetch health as a no-op
-      await fetch('http://localhost:3000/metrics/flush', { method: 'POST' })
+      await fetch('/metrics/flush', { method: 'POST' })
         .catch(() => { /* endpoint may not exist — graceful */ })
       setFlushed(true)
       setTimeout(() => setFlushed(false), 2500)
@@ -222,7 +223,7 @@ export function SettingsPage() {
             <div className="px-6 py-4 flex flex-col gap-3">
               {/* Open Prometheus metrics */}
               <a
-                href="http://localhost:3000/metrics"
+                href={`${BACKEND_HREF}/metrics`}
                 target="_blank" rel="noreferrer"
                 className="flex items-center justify-between px-4 py-3 border border-border-col rounded-xl
                            hover:border-berry/40 hover:bg-sidebar-act transition-all group"
@@ -231,7 +232,7 @@ export function SettingsPage() {
                   <Activity size={16} className="text-berry" />
                   <div>
                     <p className="text-[13px] font-semibold text-txt-primary">Open Prometheus Metrics</p>
-                    <p className="text-[11px] text-txt-secondary">localhost:3000/metrics</p>
+                    <p className="text-[11px] text-txt-secondary">{BACKEND_HREF}/metrics</p>
                   </div>
                 </div>
                 <ExternalLink size={13} className="text-txt-secondary group-hover:text-berry transition-colors" />
@@ -239,7 +240,7 @@ export function SettingsPage() {
 
               {/* Open Swagger docs */}
               <a
-                href="http://localhost:3000/docs"
+                href={`${BACKEND_HREF}/docs`}
                 target="_blank" rel="noreferrer"
                 className="flex items-center justify-between px-4 py-3 border border-border-col rounded-xl
                            hover:border-berry/40 hover:bg-sidebar-act transition-all group"
@@ -248,7 +249,7 @@ export function SettingsPage() {
                   <ExternalLink size={16} className="text-berry-blue" />
                   <div>
                     <p className="text-[13px] font-semibold text-txt-primary">Open Swagger UI</p>
-                    <p className="text-[11px] text-txt-secondary">localhost:3000/docs</p>
+                    <p className="text-[11px] text-txt-secondary">{BACKEND_HREF}/docs</p>
                   </div>
                 </div>
                 <ExternalLink size={13} className="text-txt-secondary group-hover:text-berry-blue transition-colors" />

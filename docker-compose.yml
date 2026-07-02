@@ -1,146 +1,107 @@
-# UPGRADE 1 — Redis Cluster (local 3-node)
+# docker-compose.yml
 # ─────────────────────────────────────────────────────────────────────────────
-# WHY: Single Redis = SPOF. Cluster = automatic failover + horizontal sharding.
+# Distributed High-Throughput API Rate Limiter — Production Stack
 #
-# Bitnami redis-cluster image handles the cluster-init handshake automatically.
-# 3 primaries + 0 replicas for local dev (use 3+3 in staging/prod).
+# Services:
+#   redis    — Redis 7 standalone (use docker-compose.cluster.yml for cluster)
+#   api      — Express + TypeScript backend
+#   frontend — React SPA built with Vite, served by Nginx
+#   proxy    — Nginx reverse proxy (unifies port 80)
 #
-# IMPORTANT: After first boot, the cluster needs a few seconds to elect
-# primaries. The API server will retry with exponential back-off (see redisClient.ts).
+# Usage:
+#   Start:   docker compose up -d --build
+#   Logs:    docker compose logs -f
+#   Stop:    docker compose down
+#   Rebuild: docker compose up -d --build --force-recreate
 # ─────────────────────────────────────────────────────────────────────────────
 
-version: '3.8'
+version: '3.9'
 
 services:
 
-  # ── UPGRADE 1: Redis Cluster (3 nodes) ──────────────────────────────────────
-  redis-node-1:
-    image: bitnami/redis-cluster:7.2
-    environment:
-      - REDIS_PORT_NUMBER=7001
-      - REDIS_CLUSTER_ANNOUNCE_PORT=7001
-      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-1
-      - REDIS_CLUSTER_CREATOR=yes
-      - REDIS_CLUSTER_REPLICAS=0
-      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
-      - ALLOW_EMPTY_PASSWORD=yes
+  # ── Redis (standalone, single node) ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rl-redis
+    restart: unless-stopped
     ports:
-      - "7001:7001"
-    networks:
-      - rate-limiter-net
-
-  redis-node-2:
-    image: bitnami/redis-cluster:7.2
-    environment:
-      - REDIS_PORT_NUMBER=7002
-      - REDIS_CLUSTER_ANNOUNCE_PORT=7002
-      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-2
-      - REDIS_CLUSTER_REPLICAS=0
-      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
-      - ALLOW_EMPTY_PASSWORD=yes
-    ports:
-      - "7002:7002"
-    networks:
-      - rate-limiter-net
-    depends_on:
-      - redis-node-1
-
-  redis-node-3:
-    image: bitnami/redis-cluster:7.2
-    environment:
-      - REDIS_PORT_NUMBER=7003
-      - REDIS_CLUSTER_ANNOUNCE_PORT=7003
-      - REDIS_CLUSTER_ANNOUNCE_HOSTNAME=redis-node-3
-      - REDIS_CLUSTER_REPLICAS=0
-      - REDIS_NODES=redis-node-1:7001 redis-node-2:7002 redis-node-3:7003
-      - ALLOW_EMPTY_PASSWORD=yes
-    ports:
-      - "7003:7003"
-    networks:
-      - rate-limiter-net
-    depends_on:
-      - redis-node-1
-
-  # ── UPGRADE 2: Nginx reverse proxy for TLS termination ──────────────────────
-  # WHY terminate TLS at nginx NOT in Express:
-  #   - Nginx handles TLS handshake in C (10x faster than Node.js)
-  #   - Express/Node stays single-purpose (business logic only)
-  #   - Cert rotation doesn't require app restarts (nginx -s reload)
-  #   - nginx can rate-limit connections before they reach Node (extra DDoS layer)
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
+      - "6379:6379"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
     networks:
-      - rate-limiter-net
-    depends_on:
-      - api
+      - rl-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
-  # ── API Gateway ─────────────────────────────────────────────────────────────
+  # ── Express / TypeScript API ─────────────────────────────────────────────────
   api:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: rl-api
+    restart: unless-stopped
     environment:
-      - PORT=3000
-      - REDIS_CLUSTER_NODES=redis-node-1:7001,redis-node-2:7002,redis-node-3:7003
-      - FAIL_OPEN=true
+      NODE_ENV:    production
+      PORT:        "3000"
+      REDIS_URL:   redis://redis:6379
+      FAIL_OPEN:   "true"
+      RATE_LIMIT_MAX: "100"
+      WINDOW_MS:   "60000"
     expose:
       - "3000"
     networks:
-      - rate-limiter-net
+      - rl-net
     depends_on:
-      - redis-node-1
-      - redis-node-2
-      - redis-node-3
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 10s
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
 
-  # ── Prometheus ───────────────────────────────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  # ── React SPA (built by Vite, served by Nginx) ───────────────────────────────
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: rl-frontend
+    restart: unless-stopped
+    expose:
+      - "80"
     networks:
-      - rate-limiter-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-  # ── Grafana ──────────────────────────────────────────────────────────────────
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/rate-limiter.json
-      # UPGRADE 4: Alerting contact point secrets injected via env
-      - GF_UNIFIED_ALERTING_ENABLED=true
-      - PAGERDUTY_INTEGRATION_KEY=${PAGERDUTY_INTEGRATION_KEY:-}
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
-    volumes:
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting
-      - grafana-data:/var/lib/grafana
-    networks:
-      - rate-limiter-net
+      - rl-net
     depends_on:
-      - prometheus
+      - api
+
+  # ── Nginx Reverse Proxy ────────────────────────────────────────────────────
+  proxy:
+    image: nginx:alpine
+    container_name: rl-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - rl-net
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 networks:
-  rate-limiter-net:
+  rl-net:
     driver: bridge
 
 volumes:
-  grafana-data:
+  redis-data:
